@@ -1,0 +1,13 @@
+
+version: '3'
+
+services:
+  postgres:
+    image: postgis/postgis:13-3.1-alpine
+    container_name: mikro-orm-reproduction-postgres
+    ports:
+      - '5488:5432'
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
