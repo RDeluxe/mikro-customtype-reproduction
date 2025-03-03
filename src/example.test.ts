@@ -1,19 +1,113 @@
-import { MikroORM, RequestContext, wrap } from '@mikro-orm/postgresql';
-import { Station } from './entities/station.entity';
-import { Keyword } from './entities/keyword.entity';
-import { CalendarEvent } from './entities/event.entity';
-import config from './mikro-orm.config';
-import { AppModule } from './nest-test/app.module';
-import { Test } from '@nestjs/testing';
-import request from 'supertest';
+import {
+  Collection,
+  Entity,
+  ManyToMany,
+  MikroORM,
+  PrimaryKey,
+  Property,
+  RequestContext,
+  wrap
+} from '@mikro-orm/postgresql';
 
 let orm: MikroORM;
-
 const eventID = crypto.randomUUID();
+
+
+import { Type } from '@mikro-orm/postgresql'
+import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
+
+export type PointDTO = {
+  latitude: number;
+  longitude: number;
+}
+
+export class PointType extends Type<
+  PointDTO | undefined,
+  string | undefined
+> {
+  convertToDatabaseValue(value?: PointDTO): string | undefined {
+    if (!value)
+      return undefined
+
+    return `SRID=4326;POINT(${value.longitude} ${value.latitude})`
+  }
+
+  convertToJSValue(value?: string): PointDTO | undefined {
+    const m = value?.match(/point\((-?\d+(\.\d+)?) (-?\d+(\.\d+)?)\)/i)
+
+    if (!m)
+      return undefined
+
+    return { latitude: +m[1], longitude: +m[3] }
+  }
+
+  convertToJSValueSQL(key: string) {
+    return `ST_AsText(${key})`
+  }
+
+  convertToDatabaseValueSQL(key: string) {
+    return `${key}::geometry`
+  }
+
+  getColumnType(): string {
+    return 'geometry'
+  }
+}
+
+
+@Entity()
+export class CalendarEvent {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ type: 'text' })
+  name!: string
+
+  @ManyToMany(() => Keyword)
+  keywords = new Collection<Keyword>(this)
+
+  @ManyToMany(() => Station)
+  stations = new Collection<Station>(this)
+}
+
+@Entity()
+export class Station {
+  @PrimaryKey({ type: 'text' })
+  name!: string
+
+  @Property({ type: PointType })
+  position!: PointDTO
+
+  @Property({ type: 'text' })
+  testProperty!: string
+
+  @ManyToMany(() => CalendarEvent, event => event.stations)
+  events = new Collection<CalendarEvent>(this)
+}
+
+
+@Entity()
+export class Keyword {
+  @PrimaryKey({ type: 'text' })
+  id!: string
+
+  @ManyToMany(() => CalendarEvent, event => event.keywords)
+  events = new Collection<CalendarEvent>(this)
+}
+
+
 
 beforeAll(async () => {
   orm = await MikroORM.init({
-    ...config,
+    dbName: 'postgres',
+    user: 'postgres',
+    password: 'password',
+    host: 'localhost',
+    metadataProvider: TsMorphMetadataProvider,
+    forceUtcTimezone: true,
+    port: 5488,
+    entities: [CalendarEvent, Station, Keyword],
+    debug: ['query', 'query-params'],
     allowGlobalContext: true, // only for testing
   });
   await orm.schema.refreshDatabase();
@@ -23,6 +117,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await orm.close(true);
 });
+
 
 beforeEach(async () => {
   await orm.schema.refreshDatabase();
@@ -157,28 +252,4 @@ test('test disconnecting the identity map', async () => {
     const updatedEvent = await orm.em.findOneOrFail(CalendarEvent, { id: eventID }, { populate: populateOptions, disableIdentityMap: true });
     expect(updatedEvent.stations.getItems()[0].position).toEqual(station3Dto.position);
   })
-});
-
-// But with Nest it fails
-test('nest test', async () => {
-  const moduleRef = await Test.createTestingModule({
-    imports: [AppModule],
-  }).compile()
-
-  const app = moduleRef.createNestApplication();
-  await app.init();
-
-  const updatedEvent = (await request(app.getHttpServer()).post('/update/' + eventID).send({ name: 'new name' })).body;
-
-  expect(updatedEvent.stations.length).toBe(2);
-  expect(updatedEvent.stations).toEqual([{ name: 'First Station', position: { latitude: 1, longitude: 1 }, testProperty: 'Test Property 1' }, { name: 'Second Station', position: { latitude: 2, longitude: 2 }, testProperty: 'Test Property 2' }]);
-
-  const updatedEvent2 = await request(app.getHttpServer()).post('/update/' + eventID).send({ stations: ['Third Station'] });
-
-  expect(updatedEvent2.body.stations.length).toBe(1);
-
-  // The station.position property is not hydrated here
-  expect(updatedEvent2.body.stations).toEqual([{ name: 'Third Station', position: { latitude: 3, longitude: 3 }, testProperty: 'Test Property 3' }]);
-
-  await app.close();
 });
