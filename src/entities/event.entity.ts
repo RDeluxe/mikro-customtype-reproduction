@@ -4,7 +4,6 @@ import { Station } from './station.entity'
 
 @Entity()
 export class CalendarEvent {
-  [x: string]: any
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
